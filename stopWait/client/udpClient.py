@@ -1,6 +1,7 @@
 import argparse
 from enum import Enum
 from os.path import isfile
+from select import select
 from socket import socket, AF_INET, SOCK_DGRAM
 from struct import pack, unpack
 from sys import argv, exit
@@ -8,10 +9,14 @@ from sys import argv, exit
 parser = argparse.ArgumentParser(description="Retrieve the file and store it on the local machine")
 parser.add_argument('filename', help='name of the file to be retrieved')
 parser.add_argument('--server', required=False, default='localhost:50001', help='server address from which, the file will be retrieved')
-parser.add_argument('--timeout', required=False, default=2, help='number of seconds before re-sending a request to the server')
-parser.add_argument('--maxtries', required=False, default=5, help='number of tries of re-sending a request to the server before giving up')
+parser.add_argument('--timeout', type=int, required=False, default=2, help='number of seconds before re-sending a request to the server')
+parser.add_argument('--maxtries', type=int, required=False, default=5, help='number of tries of re-sending a request to the server before giving up')
 
-args = parser.parse_args(['C:\Users\jesus\source\repos\s19-nets\udp-file-transfer-team-10\stopWait\client\message'])
+# if len(argv) <= 1:
+#     print('Error: file name was not specified')
+#     exit(1)
+
+args = parser.parse_args(['message'])
 print(args)
 
 # Parse the server address
@@ -41,14 +46,14 @@ client_socket = socket(AF_INET, SOCK_DGRAM)
 fname = args.filename
 last_ack_block = 0
 max_tries = args.maxtries
-server_addr = (addr_list[0], addr_list[1])
+server_addr = (addr_list[0], int(addr_list[1]))
 state = State.READY
 timeout = args.timeout
 tries = 0
 
 def encode_msg(is_last_block, msgtype, ack_block, payload):
     is_last_block_id = 0x10 if is_last_block else 0
-    metadata = is_last_block_id + msgtype_id
+    metadata = is_last_block_id + msgtype.value
     
     struct_fmt = "{}s".format(len(payload))
     payload = payload.encode()
@@ -72,7 +77,7 @@ def decode_msg(msg):
 
     return is_last_block, msgtype, ack_block, payload
 
-def get(sock=None, retry=True):
+def get(sock, retry=True):
     global f, fname, state, last_ack_block, server_addr 
 
     client_msgtype = MsgType.REQUEST if state == State.READY else MsgType.ACK
@@ -80,7 +85,7 @@ def get(sock=None, retry=True):
          
     if retry == True:
         msg = encode_msg(True, client_msgtype, last_ack_block, fname)
-        client_socket.sendto(msg, server_addr)
+        sock.sendto(msg, server_addr)
     else:
         msg, server_addr = sock.recvfrom(100)
         is_last_block, msgtype, ack_block, payload = decode_msg(msg)
@@ -93,7 +98,7 @@ def get(sock=None, retry=True):
                 stop_writing = is_last_block
                 
             msg = encode_msg(True, MsgType.ACK, last_ack_block, fname)
-            client_socket.sendto(msg, server_addr)  
+            sock.sendto(msg, server_addr)  
         elif msgtype == MsgType.ERROR:
             print(payload)
             exit(1)
@@ -108,10 +113,11 @@ error_sockfunc = {}     # broken
 read_sockfunc[client_socket] = get
 
 # Send first request before sleeping for 'timeout' seconds
-get()
+get(client_socket)
 tries += 1
 
-while 1:
+running = True
+while running:
     read_rdyset, write_rdyset, err_rdyset = select(list(read_sockfunc.keys()),
                                                    list(write_sockfunc.keys()), 
                                                    list(error_sockfunc.keys()),
@@ -119,17 +125,16 @@ while 1:
     if not read_rdyset and not write_rdyset and not err_rdyset:
         print("retry")
         keep_trying = True
-        if tries == MAX_TRIES: 
+        if tries == max_tries: 
             print("Error: maximum number of tries was reached, would you like to keep trying? [t | f]")
-            keep_trying = input('prompt') != "t"
-        elif keep_trying: 
+            running = input('prompt') == "t"
+        elif running: 
             tries += 1
-            get()
+            get(client_socket)
     else:
         print("a msg was received")
         tries = 0
         for sock in read_rdyset:
-            stop_program = read_sockfunc[sock](None, request, False)
-            if stop_program:
-                f.close()   # when last block is received, the program terminates
-                return
+            if read_sockfunc[sock](sock, False):
+                running = False
+                break
