@@ -28,7 +28,7 @@ if len(addr_list) != 2 or len(addr_list[0]) == 0 or len(addr_list[1]) == 0:
 try:
     f = open(str(args.filename), 'w')
 except FileNotFoundError:
-    print('Error: specified file was not found')
+    print('Error: specified file was not found') 
     exit(1)
 
 class State(Enum):
