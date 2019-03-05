@@ -99,7 +99,7 @@ def get(sock, retry=True):
         msg, server_addr = sock.recvfrom(100)
         is_last_block, msgtype, ack_block, payload = decode_msg(msg)
 
-        if msgtype == MsgType.DATA:
+        if msgtype == 0:
             if ack_block == last_ack_block + 1:     # checks that the received block is the next in the sequence
                 f.write(payload)
                 last_ack_block += 1
