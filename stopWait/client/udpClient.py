@@ -6,6 +6,7 @@ from socket import socket, AF_INET, SOCK_DGRAM
 from struct import pack, unpack
 from sys import argv, exit
 
+# Create parser for user input
 parser = argparse.ArgumentParser(description="Retrieve the file and store it on the local machine")
 parser.add_argument('filename', help='name of the file to be retrieved')
 parser.add_argument('--server', required=False, default='localhost:50001', help='server address from which, the file will be retrieved')
@@ -16,32 +17,37 @@ parser.add_argument('--maxtries', type=int, required=False, default=5, help='num
 #     print('Error: file name was not specified')
 #     exit(1)
 
+# Parse given user input
 args = parser.parse_args(['message'])
 print(args)
 
-# Parse the server address
+# Parse the given server address [optional]
 addr_list = str(args.server).split(':')
 if len(addr_list) != 2 or len(addr_list[0]) == 0 or len(addr_list[1]) == 0:
     print('Error: enter a valid server address i.e., IP:port')
     exit(1)
 
+# open a file to write the retrieved file by the server
 try:
     f = open(str(args.filename), 'w')
 except FileNotFoundError:
     print('Error: specified file was not found') 
     exit(1)
 
+# Enum class used to specify each state the client can be in
 class State(Enum):
     READY = 0
     WAITING = 1 
     EXITING = 2
 
+# Enum class used to specify the type of a message
 class MsgType(Enum):
     DATA = 0
     REQUEST = 1
     ACK = 2
     ERROR = 3   
 
+# Global variables used througout the system
 client_socket = socket(AF_INET, SOCK_DGRAM)
 fname = args.filename
 last_ack_block = 0
@@ -51,6 +57,7 @@ state = State.READY
 timeout = args.timeout
 tries = 0
 
+# Method to encode a message before sending it [encoding based on the defined protocol]
 def encode_msg(is_last_block, msgtype, ack_block, payload):
     is_last_block_id = 0x10 if is_last_block else 0
     metadata = is_last_block_id + msgtype.value
@@ -58,25 +65,27 @@ def encode_msg(is_last_block, msgtype, ack_block, payload):
     struct_fmt = "{}s".format(len(payload))
     payload = payload.encode()
     
-    msg = pack('B', metadata)
+    msg = pack('B', metadata)       # numbers are packed into hexadecimal strings to send them and easily manage them
     msg += pack('I', ack_block)
     msg += pack(struct_fmt, payload)
 
     return msg
 
+# Method to decode a received message [encoding based on the defined protocol]
 def decode_msg(msg):
     metadata = unpack('B', msg[:1])[0]
     ack_block = unpack('I', msg[1:5])[0]
     payload = msg[5:].decode()
 
-    msgtype_mask = 0x0F
+    msgtype_mask = 0x0F         # first byte of metadata is divided into [msgtype | ackblock]
     lastblock_mask = 0x10
 
-    is_last_block = metadata & lastblock_mask == 1
+    is_last_block = metadata & lastblock_mask == 1  
     msgtype = metadata & msgtype_mask
 
     return is_last_block, msgtype, ack_block, payload
 
+# Method to request a get operation to the server
 def get(sock, retry=True):
     global f, fname, state, last_ack_block, server_addr 
 
@@ -91,7 +100,7 @@ def get(sock, retry=True):
         is_last_block, msgtype, ack_block, payload = decode_msg(msg)
 
         if msgtype == MsgType.DATA:
-            if ack_block == last_ack_block + 1:
+            if ack_block == last_ack_block + 1:     # checks that the received block is the next in the sequence
                 f.write(payload)
                 last_ack_block += 1
                 state = State.WAITING

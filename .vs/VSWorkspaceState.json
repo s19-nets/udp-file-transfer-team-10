@@ -1,8 +1,10 @@
 {
   "ExpandedNodes": [
+    "",
     "\\stopWait",
     "\\stopWait\\client",
     "\\stopWait\\server"
   ],
+  "SelectedNode": "\\stopWait\\client\\udpClient.py",
   "PreviewInSolutionExplorer": false
 }
