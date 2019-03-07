@@ -89,7 +89,7 @@ def sendFile(sock, retry=True):
         sock.sendto(msg, client_addr)
     else:
         msg, client_addr = sock.recvfrom(100)
-        is_last_block, msgtype, ack_block, payload = decode_msg(msg)
+        _, msgtype, ack_block, payload = decode_msg(msg)
         print('Received '+payload+' '+str(msgtype))
 
         if msgtype == 1:

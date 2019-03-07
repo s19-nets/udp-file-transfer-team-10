@@ -61,11 +61,12 @@ tries = 0
 def encode_msg(is_last_block, msgtype, ack_block, payload):
     is_last_block_id = 0x10 if is_last_block else 0
     metadata = is_last_block_id + msgtype.value
-    
+    print(metadata)
     struct_fmt = "{}s".format(len(payload))
     payload = payload.encode()
     
     msg = pack('B', metadata)       # numbers are packed into hexadecimal strings to send them and easily manage them
+    print(msg)
     msg += pack('I', ack_block)
     msg += pack(struct_fmt, payload)
 
@@ -80,10 +81,13 @@ def decode_msg(msg):
     msgtype_mask = 0x0F         # first byte of metadata is divided into [msgtype | ackblock]
     lastblock_mask = 0x10
 
-    is_last_block = metadata & lastblock_mask == 1  
+    is_last_block = metadata & lastblock_mask == 0x10  
     msgtype = metadata & msgtype_mask
 
     return is_last_block, msgtype, ack_block, payload
+
+is_last_block, msgtype, ack_block, payload = decode_msg(encode_msg(True, MsgType.ACK, 100, "Hola"))
+print(is_last_block)
 
 # Method to request a get operation to the server
 def get(sock, retry=True):
@@ -99,7 +103,7 @@ def get(sock, retry=True):
         msg, server_addr = sock.recvfrom(100)
         is_last_block, msgtype, ack_block, payload = decode_msg(msg)
 
-        if msgtype == 0:
+        if msgtype == MsgType.DATA:
             if ack_block == last_ack_block + 1:     # checks that the received block is the next in the sequence
                 f.write(payload)
                 last_ack_block += 1
