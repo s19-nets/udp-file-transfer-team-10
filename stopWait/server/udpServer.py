@@ -6,6 +6,12 @@ from socket import socket, AF_INET, SOCK_DGRAM
 from struct import pack, unpack
 from sys import argv, exit
 
+def peek_file(f):
+    pos = f.tell()
+    line = f.read(95)
+    f.seek(pos)
+    return line
+
 # Create parser for user input
 parser = argparse.ArgumentParser(description="Server that transfers a requested file to a client")
 parser.add_argument('--port', required=False, default='50001',
@@ -48,6 +54,10 @@ tries = 0
 byte_s=0
 f=0
 
+def reset():
+    global tries,byte_s,f,last_ack_block,state
+    tries, byte_s, f, last_ack_block, state = [0]*5
+
 # Method to encode a message before sending it [encoding based on the defined protocol]
 def encode_msg(is_last_block, msgtype, ack_block, payload):
     is_last_block_id = 0x10 if is_last_block else 0
@@ -72,16 +82,14 @@ def decode_msg(msg):
     msgtype_mask = 0x0F  # first byte of metadata is divided into [msgtype | ackblock]
     lastblock_mask = 0x10
 
-    is_last_block = metadata & lastblock_mask == 1
+    is_last_block = metadata & lastblock_mask == 0x10
     msgtype = metadata & msgtype_mask
 
     return is_last_block, msgtype, ack_block, payload
 
-
 # Method to request a get operation to the server
 def sendFile(sock, retry=True):
     global f, state, last_ack_block, client_addr, byte_s
-
     stop_writing = False
 
     if retry == True:
@@ -89,28 +97,28 @@ def sendFile(sock, retry=True):
         sock.sendto(msg, client_addr)
     else:
         msg, client_addr = sock.recvfrom(100)
-        _, msgtype, ack_block, payload = decode_msg(msg)
-        print('Received '+payload+' '+str(msgtype))
-
+        is_last_block, msgtype, ack_block, payload = decode_msg(msg)
         if msgtype == 1:
             try:
                 f = open(str(payload), 'r')
             except FileNotFoundError:
                 print('Error: specified file was not found')
                 exit(1)
-            byte_s = f.read(100)
-            print(byte_s)
+            byte_s = f.read(95)
+            if not peek_file(f):
+                stop_writing = True
             state = State.WAITING
-            stop_writing = is_last_block
-            msg = encode_msg(True, MsgType.DATA, last_ack_block, byte_s)
+            last_ack_block += 1
+            msg = encode_msg(stop_writing, MsgType.DATA, last_ack_block, byte_s)
             sock.sendto(msg, client_addr)
         elif msgtype == 2:
             if ack_block == last_ack_block:  # checks that the received block is the next in the sequence
                 last_ack_block += 1
-                byte_s = f.read(100)
+                byte_s = f.read(95)
+                if not peek_file(f):
+                    stop_writing = True
                 state = State.WAITING
-                stop_writing = is_last_block
-                msg = encode_msg(True, MsgType.DATA, last_ack_block, byte_s)
+                msg = encode_msg(stop_writing, MsgType.DATA, last_ack_block, byte_s)
                 sock.sendto(msg, client_addr)
         elif msgtype == MsgType.ERROR:
             print(payload)
@@ -147,5 +155,4 @@ while running:
         tries = 0
         for sock in read_rdyset:
             if read_sockfunc[sock](sock, False):
-                running = False
-                break
+                reset()
