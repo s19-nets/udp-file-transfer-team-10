@@ -1,6 +1,6 @@
 import argparse
 from enum import Enum
-from os.path import isfile
+from os.path import abspath, dirname, join, isfile
 from select import select
 from socket import socket, AF_INET, SOCK_DGRAM
 from struct import pack, unpack
@@ -44,19 +44,21 @@ class MsgType(Enum):
 
 # Global variables used througout the system
 server_socket = socket(AF_INET, SOCK_DGRAM)
-server_addr =("",int(args.port))
+server_addr = ("",int(args.port))
 server_socket.bind(server_addr)
 last_ack_block = 0
 max_tries = args.maxtries
 state = State.READY
 timeout = args.timeout
 tries = 0
-byte_s=0
+byte_s_backup = []
 f=0
 
 def reset():
-    global tries,byte_s,f,last_ack_block,state
-    tries, byte_s, f, last_ack_block, state = [0]*5
+    global tries, f, last_ack_block, state, byte_s_backup
+    byte_s_backup = []
+    state = State.READY
+    tries, f, last_ack_block = [0]*3
 
 # Method to encode a message before sending it [encoding based on the defined protocol]
 def encode_msg(is_last_block, msgtype, ack_block, payload):
@@ -83,48 +85,54 @@ def decode_msg(msg):
     lastblock_mask = 0x10
 
     is_last_block = metadata & lastblock_mask == 0x10
-    msgtype = metadata & msgtype_mask
+    msgtype = MsgType(metadata & msgtype_mask)
 
-    return is_last_block, msgtype, ack_block, payload
+    return is_last_block, msgtype, ack_block, str(payload)
 
 # Method to request a get operation to the server
 def sendFile(sock, retry=True):
-    global f, state, last_ack_block, client_addr, byte_s
-    stop_writing = False
+    global f, state, last_ack_block, client_addr, byte_s_backup
+    stop_sending = False
 
     if retry == True:
-        msg = encode_msg(True, MsgType.DATA, last_ack_block, byte_s)
+        stop_sending, byte_s, byte_s_msgtype = byte_s_backup[last_ack_block]
+        msg = encode_msg(stop_sending, byte_s_msgtype, last_ack_block, byte_s)
         sock.sendto(msg, client_addr)
     else:
         msg, client_addr = sock.recvfrom(100)
-        is_last_block, msgtype, ack_block, payload = decode_msg(msg)
-        if msgtype == 1:
-            try:
-                f = open(str(payload), 'r')
-            except FileNotFoundError:
-                print('Error: specified file was not found')
-                exit(1)
-            byte_s = f.read(95)
-            if not peek_file(f):
-                stop_writing = True
+        _, msgtype, ack_block, payload = decode_msg(msg)
+        if msgtype == MsgType.REQUEST:
             state = State.WAITING
-            last_ack_block += 1
-            msg = encode_msg(stop_writing, MsgType.DATA, last_ack_block, byte_s)
-            sock.sendto(msg, client_addr)
-        elif msgtype == 2:
-            if ack_block == last_ack_block:  # checks that the received block is the next in the sequence
-                last_ack_block += 1
+            try:
+                f = open(join(dirname(abspath(__file__)), payload), 'r')
                 byte_s = f.read(95)
-                if not peek_file(f):
-                    stop_writing = True
-                state = State.WAITING
-                msg = encode_msg(stop_writing, MsgType.DATA, last_ack_block, byte_s)
-                sock.sendto(msg, client_addr)
+                byte_s_msgtype = MsgType.DATA
+                stop_sending = not peek_file(f)            
+            except FileNotFoundError:
+                byte_s = 'Error: specified file was not found'
+                byte_s_msgtype = MsgType.ERROR
+                stop_sending = True
+            last_ack_block += 1
+            byte_s_backup.append((stop_sending, byte_s, byte_s_msgtype))  # record message for retransmition on duplicate
+            msg = encode_msg(stop_sending, byte_s_msgtype, last_ack_block, byte_s)
+            sock.sendto(msg, client_addr)
+        elif msgtype == MsgType.ACK and state == State.WAITING and ack_block <= last_ack_block:
+            if ack_block == last_ack_block: 
+                last_ack_block += 1
+                ack_block = last_ack_block
+                byte_s = f.read(95)
+                byte_s_msgtype = MsgType.DATA
+                stop_sending = not peek_file(f)
+            else:      # retranmission on duplicate
+                stop_sending, byte_s, byte_s_msgtype = byte_s_backup[ack_block] 
+            msg = encode_msg(stop_sending, byte_s_msgtype, ack_block, byte_s)
+            byte_s_backup.append((stop_sending, byte_s, byte_s_msgtype))  # record message for retransmition on duplicate
+            sock.sendto(msg, client_addr)
         elif msgtype == MsgType.ERROR:
             print(payload)
-            exit(1)
+            stop_sending = True
 
-    return stop_writing
+    return stop_sending
 
 
 # map socket to function to call when socket is....
@@ -142,7 +150,7 @@ while running:
                                                    timeout)
     if not read_rdyset and not write_rdyset and not err_rdyset:
         if state == 1:
-            print("retry")
+            # print("retry")
             keep_trying = True
             if tries == max_tries:
                 print("Error: maximum number of tries was reached, would you like to keep trying? [t | f]")
@@ -151,7 +159,6 @@ while running:
                 tries += 1
                 sendFile(server_socket)
     else:
-        print("a msg was received")
         tries = 0
         for sock in read_rdyset:
             if read_sockfunc[sock](sock, False):

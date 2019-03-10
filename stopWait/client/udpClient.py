@@ -1,6 +1,6 @@
 import argparse
 from enum import Enum
-from os.path import isfile
+from os.path import abspath, dirname, join, isfile
 from select import select
 from socket import socket, AF_INET, SOCK_DGRAM
 from struct import pack, unpack
@@ -8,17 +8,17 @@ from sys import argv, exit
 
 # Create parser for user input
 parser = argparse.ArgumentParser(description="Retrieve the file and store it on the local machine")
-parser.add_argument('filename', help='name of the file to be retrieved')
-parser.add_argument('--server', required=False, default='localhost:50001', help='server address from which, the file will be retrieved')
+parser.add_argument('filename', type=str, help='name of the file to be retrieved')
+parser.add_argument('--server', required=False, default='localhost:50000', help='server address from which, the file will be retrieved')
 parser.add_argument('--timeout', type=int, required=False, default=2, help='number of seconds before re-sending a request to the server')
 parser.add_argument('--maxtries', type=int, required=False, default=5, help='number of tries of re-sending a request to the server before giving up')
 
-# if len(argv) <= 1:
-#     print('Error: file name was not specified')
-#     exit(1)
+if len(argv) <= 1:
+    print('Error: file name was not specified')
+    exit(1)
 
 # Parse given user input
-args = parser.parse_args(['message'])
+args = parser.parse_args(argv[1:])
 print(args)
 
 # Parse the given server address [optional]
@@ -29,7 +29,7 @@ if len(addr_list) != 2 or len(addr_list[0]) == 0 or len(addr_list[1]) == 0:
 
 # open a file to write the retrieved file by the server
 try:
-    f = open(str(args.filename), 'w')
+    f = open(join(dirname(abspath(__file__)), str(args.filename)), 'w')
 except FileNotFoundError:
     print('Error: specified file was not found') 
     exit(1)
@@ -80,7 +80,7 @@ def decode_msg(msg):
     lastblock_mask = 0x10
 
     is_last_block = metadata & lastblock_mask == 0x10
-    msgtype = metadata & msgtype_mask
+    msgtype = MsgType(metadata & msgtype_mask)
 
     return is_last_block, msgtype, ack_block, payload
 
@@ -93,21 +93,20 @@ def get(sock, retry=True):
     stop_writing = False
          
     if retry == True:
-        msg = encode_msg(True, client_msgtype, last_ack_block, fname)
+        msg = encode_msg(False, client_msgtype, last_ack_block, fname)
         sock.sendto(msg, server_addr)
     else:
         msg, server_addr = sock.recvfrom(100)
         is_last_block, msgtype, ack_block, payload = decode_msg(msg)
-
-        if msgtype == 0:
+        if msgtype == MsgType.DATA:
             if ack_block == last_ack_block + 1:     # checks that the received block is the next in the sequence
                 f.write(payload)
                 last_ack_block += 1
                 state = State.WAITING
                 stop_writing = is_last_block
                 
-            msg = encode_msg(True, MsgType.ACK, last_ack_block, fname)
-            sock.sendto(msg, server_addr)  
+                msg = encode_msg(False, MsgType.ACK, last_ack_block, fname)
+                sock.sendto(msg, server_addr)  
         elif msgtype == MsgType.ERROR:
             print(payload)
             exit(1)
@@ -132,7 +131,6 @@ while running:
                                                    list(error_sockfunc.keys()),
                                                    timeout)
     if not read_rdyset and not write_rdyset and not err_rdyset:
-        print("retry")
         keep_trying = True
         if tries == max_tries: 
             print("Error: maximum number of tries was reached, would you like to keep trying? [t | f]")
@@ -141,7 +139,6 @@ while running:
             tries += 1
             get(client_socket)
     else:
-        print("a msg was received")
         tries = 0
         for sock in read_rdyset:
             if read_sockfunc[sock](sock, False):
